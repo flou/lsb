@@ -24,7 +24,7 @@ const (
 	maxObjectSizeLimit int64 = 400 * 1024 * 1024
 )
 
-vars (
+var (
 	bucketName          string
 	bucketPrefix        string
 	filter              string
