@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/c2h5oh/datasize"
 	"golang.org/x/term"
 )
@@ -22,7 +24,7 @@ const (
 	maxObjectSizeLimit int64 = 400 * 1024 * 1024
 )
 
-var (
+vars (
 	bucketName          string
 	bucketPrefix        string
 	filter              string
@@ -31,6 +33,7 @@ var (
 	maxSizeStr          string
 	maxSize             int64
 	printFullObjectPath bool
+	delete              bool
 )
 
 type Color struct {
@@ -49,6 +52,7 @@ func main() {
 	flag.StringVar(&minSizeStr, "minsize", "", "Minimum object size")
 	flag.StringVar(&maxSizeStr, "maxsize", "", "Maximum object size")
 	flag.BoolVar(&printFullObjectPath, "full", false, "Print the full object path")
+	flag.BoolVar(&delete, "delete", false, "Delete all objects in the bucket")
 
 	flag.Parse()
 
@@ -90,11 +94,34 @@ func main() {
 	darkRed := Color{220, 0, 0}
 	isTerm := term.IsTerminal(int(os.Stdout.Fd()))
 
+	var totalDeleteSize int64 = 0
+	var totalObjectsDeleted int = 0
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(context.TODO())
 		if err != nil {
 			log.Fatalln("error:", err)
 		}
+		if delete {
+			var objects []types.ObjectIdentifier
+			for _, object := range page.Contents {
+				objects = append(objects, types.ObjectIdentifier{Key: aws.String(*object.Key)})
+				totalDeleteSize += *object.Size
+				totalObjectsDeleted += 1
+			}
+			client.DeleteObjects(
+				context.Background(),
+				&s3.DeleteObjectsInput{
+					Bucket: &bucketName,
+					Delete: &types.Delete{
+						Objects: objects,
+						Quiet:   aws.Bool(true),
+					},
+				},
+			)
+			fmt.Printf("\033[2K\rDeleted %d objects / %s", totalObjectsDeleted, byteCountIEC(totalDeleteSize))
+			continue
+		}
+
 		for _, obj := range page.Contents {
 			key := *obj.Key
 			size := *obj.Size
@@ -110,12 +137,13 @@ func main() {
 			}
 
 			if isTerm {
-				color := white
-				if size <= 1024*1024 {
+				var color Color
+				switch {
+				case size <= minObjectSizeLimit:
 					color = white
-				} else if size >= maxObjectSizeLimit {
-					color = darkRed
-				} else {
+				case size >= maxObjectSizeLimit:
+					color = white
+				default:
 					factor := float64(size) / float64(maxObjectSizeLimit)
 					color = interpolateColor(factor, white, darkRed)
 				}
